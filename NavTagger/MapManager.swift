@@ -37,10 +37,10 @@ class MapManager: NSObject, ObservableObject {
             width: lastPanOffset.width + translation.width,
             height: lastPanOffset.height + translation.height
         )
-        
-        // Apply bounds checking
-        let clampedOffset = clampOffset(newOffset)
-        offset = clampedOffset
+        let clamped = clampOffset(newOffset)
+        withAnimation(.none) {
+            offset = clamped
+        }
     }
     
     func endPan() {
@@ -49,7 +49,10 @@ class MapManager: NSObject, ObservableObject {
     
     func updateZoom(magnification: CGFloat) {
         let newScale = lastScale * magnification
-        scale = clampScale(newScale)
+        let clamped = clampScale(newScale)
+        withAnimation(.none) {
+            scale = clamped
+        }
     }
     
     func endZoom() {

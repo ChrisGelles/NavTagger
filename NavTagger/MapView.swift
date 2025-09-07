@@ -13,75 +13,67 @@ struct MapView: View {
     
     var body: some View {
         GeometryReader { geometry in
-            let baseSide = geometry.size.height
+            let baseSide = geometry.size.height // fixed square canvas
+
             ZStack {
-                // 1. Container (can be panned and zoomed with gestures. Everything inside moves together)
-                GeometryReader { mapGeometry in
-                    ZStack {
-                        // b. Map Image
-                        Image("myFirstFloor_v03-metric")
-                            .resizable()
-                            .aspectRatio(contentMode: .fit)
-                            .frame(maxHeight: .infinity)
-                        
-                        // Grid overlay for coordinate system testing
-                        Image("blackGrid")
-                            .resizable()
-                            .aspectRatio(contentMode: .fit)
-                            .frame(maxHeight: .infinity)
-                            .opacity(0.5) // Make it semi-transparent so we can see the map underneath
-                        
-                        // a. Beacon dots/pins placed by user (stacked above map and grid)
-                        ForEach(beaconManager.placedBeacons, id: \.name) { beacon in
-                            BeaconDot(beacon: beacon, mapContentSize: mapGeometry.size)
-                        }
-                        
-                        // Debug overlay - border around the map container bounds
-                        Rectangle()
-                            .stroke(Color.red, lineWidth: 2)
-                            .frame(
-                                width: mapGeometry.size.width,
-                                height: mapGeometry.size.height
-                            )
-                            .position(
-                                x: mapGeometry.size.width / 2,
-                                y: mapGeometry.size.height / 2
-                            )
+                // FIXED-SIZE, CENTERED CONTENT
+                ZStack {
+                    // Map
+                    Image("myFirstFloor_v03-metric")
+                        .resizable()
+                        .frame(width: baseSide, height: baseSide)
+                        .clipped()
+
+                    // Grid overlay
+                    Image("blackGrid")
+                        .resizable()
+                        .frame(width: baseSide, height: baseSide)
+                        .clipped()
+                        .opacity(0.5)
+
+                    // Beacon dots (draw in the same content space)
+                    ForEach(beaconManager.placedBeacons, id: \.name) { beacon in
+                        BeaconDot(beacon: beacon, mapContentSize: CGSize(width: baseSide, height: baseSide))
                     }
-                    .gesture(
-                        DragGesture(minimumDistance: 0)
-                            .onChanged { value in
-                                // If drag distance is significant, treat as pan
-                                let dragDistance = sqrt(value.translation.width * value.translation.width + value.translation.height * value.translation.height)
-                                if dragDistance > 10 {
-                                    mapManager.updatePan(translation: value.translation)
-                                }
-                            }
-                            .onEnded { value in
-                                // If drag distance is small, treat as tap
-                                let dragDistance = sqrt(value.translation.width * value.translation.width + value.translation.height * value.translation.height)
-                                if dragDistance <= 10 {
-                                    let tapLocation = value.location
-                                    handleMapTap(at: tapLocation, mapContentSize: mapGeometry.size)
-                                } else {
-                                    mapManager.endPan()
-                                }
-                            }
-                    )
+
+                    // Optional debug border
+                    Rectangle()
+                        .stroke(Color.red, lineWidth: 1)
+                        .frame(width: baseSide, height: baseSide)
                 }
-                .coordinateSpace(name: "mapSpace")
-                .scaleEffect(mapManager.scale)
+                .frame(width: baseSide, height: baseSide)
+                .position(x: geometry.size.width / 2, y: baseSide / 2)
+                .coordinateSpace(name: "content")
+                .compositingGroup() // render as one layer (reduces flicker)
+                .scaleEffect(mapManager.scale, anchor: .center)
                 .offset(mapManager.offset)
-                .clipped()
+                // Pan (drag) gesture
                 .gesture(
-                    // Zoom gesture
-                    MagnificationGesture()
+                    DragGesture(minimumDistance: 0)
                         .onChanged { value in
-                            mapManager.updateZoom(magnification: value)
+                            let d = hypot(value.translation.width, value.translation.height)
+                            if d > 10 {
+                                mapManager.updatePan(translation: value.translation)
+                            }
                         }
-                        .onEnded { _ in
-                            mapManager.endZoom()
+                        .onEnded { value in
+                            let d = hypot(value.translation.width, value.translation.height)
+                            if d <= 10 {
+                                // Treat as tap: get tap in the SAME "content" space
+                                // location(in:) is available on SpatialTapGesture; for Drag we already have local coords.
+                                // Use the view's local coords (this ZStack) which are already in content space:
+                                let p = value.location
+                                handleMapTap(at: p, mapContentSize: CGSize(width: baseSide, height: baseSide))
+                            } else {
+                                mapManager.endPan()
+                            }
                         }
+                )
+                // Zoom gesture
+                .simultaneousGesture(
+                    MagnificationGesture()
+                        .onChanged { mapManager.updateZoom(magnification: $0) }
+                        .onEnded { _ in mapManager.endZoom() }
                 )
                 
                 // Armed Beacon Hint (outside the container so it doesn't move)
