@@ -174,6 +174,29 @@ class BeaconManager: ObservableObject {
         placedBeacons.removeAll { !validNames.contains($0.name) }
         savePlacedBeacons()
     }
+    
+    // MARK: - Debug Export
+    func copyBeaconLocationsToClipboard() {
+        var formattedText = ""
+        
+        for beacon in placedBeacons {
+            formattedText += "\(beacon.name):\n"
+            formattedText += "  X: \(beacon.position.x)\n"
+            formattedText += "  Y: \(beacon.position.y)\n"
+            formattedText += "\n"
+        }
+        
+        // Remove the last newline
+        if !formattedText.isEmpty {
+            formattedText = String(formattedText.dropLast())
+        }
+        
+        // Copy to clipboard
+        UIPasteboard.general.string = formattedText
+        
+        print("Beacon locations copied to clipboard:")
+        print(formattedText)
+    }
 }
 
 // MARK: - Color Extension

@@ -143,6 +143,14 @@ class MapManager: NSObject, ObservableObject {
         offset = .zero
         lastPanOffset = .zero
     }
+    
+    func resetToInitialPosition() {
+        // Reset to initial zoom and pan values
+        scale = 1.0
+        lastScale = 1.0
+        offset = .zero
+        lastPanOffset = .zero
+    }
 }
 
 // MARK: - CLLocationManagerDelegate

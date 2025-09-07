@@ -59,6 +59,54 @@ struct ContentView: View {
                         
                         Spacer()
                         
+                        // Copy Beacon Locations Button
+                        Button(action: {
+                            beaconManager.copyBeaconLocationsToClipboard()
+                        }) {
+                            HStack(spacing: 6) {
+                                Image(systemName: "doc.on.clipboard")
+                                    .font(.system(size: 14, weight: .medium))
+                                Text("Copy")
+                                    .font(.system(size: 12, weight: .medium))
+                            }
+                            .foregroundColor(.blue)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(
+                                RoundedRectangle(cornerRadius: 16)
+                                    .fill(Color.blue.opacity(0.1))
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 16)
+                                            .stroke(Color.blue.opacity(0.3), lineWidth: 1)
+                                    )
+                            )
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                        
+                        // Reset Map Position Button
+                        Button(action: {
+                            mapManager.resetToInitialPosition()
+                        }) {
+                            HStack(spacing: 6) {
+                                Image(systemName: "arrow.clockwise")
+                                    .font(.system(size: 14, weight: .medium))
+                                Text("Reset")
+                                    .font(.system(size: 12, weight: .medium))
+                            }
+                            .foregroundColor(.orange)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(
+                                RoundedRectangle(cornerRadius: 16)
+                                    .fill(Color.orange.opacity(0.1))
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 16)
+                                            .stroke(Color.orange.opacity(0.3), lineWidth: 1)
+                                    )
+                            )
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                        
                         // Clear Beacon Positions Button
                         Button(action: {
                             beaconManager.clearAllPlacements()
@@ -118,7 +166,7 @@ struct DrawerTab: View {
                 Image(systemName: type.icon)
                     .font(.system(size: 16, weight: .medium))
                 Text(type.title)
-                    .font(.system(size: 14, weight: .medium))
+                    .font(.system(size: 12, weight: .medium))
             }
             .foregroundColor(isSelected ? .white : .primary)
             .padding(.horizontal, 16)
