@@ -42,6 +42,7 @@ class BeaconManager: ObservableObject {
     ]
     
     private let persistenceKey = "placedBeacons"
+    private let sharedUserDefaults = UserDefaults(suiteName: "group.com.cmnh.beaconapps") ?? UserDefaults.standard
     
     init() {
         loadPlacedBeacons()
@@ -126,11 +127,11 @@ class BeaconManager: ObservableObject {
             ]
         }
         
-        UserDefaults.standard.set(data, forKey: persistenceKey)
+        sharedUserDefaults.set(data, forKey: persistenceKey)
     }
     
     private func loadPlacedBeacons() {
-        guard let data = UserDefaults.standard.array(forKey: persistenceKey) as? [[String: Any]] else {
+        guard let data = sharedUserDefaults.array(forKey: persistenceKey) as? [[String: Any]] else {
             print("No saved beacon placements found.")
             return
         }
