@@ -27,7 +27,6 @@
 		6BD70D222E6A758400AE2C7B /* NavTagger.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = NavTagger.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		6BD70D2F2E6A758500AE2C7B /* NavTaggerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NavTaggerTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		6BD70D392E6A758500AE2C7B /* NavTaggerUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NavTaggerUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		6BD70D4A2E6A758500AE2C7B /* NavTagger.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = NavTagger.entitlements; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */

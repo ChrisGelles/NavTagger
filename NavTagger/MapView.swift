@@ -10,79 +10,49 @@ import SwiftUI
 struct MapView: View {
     @ObservedObject var mapManager: MapManager
     @ObservedObject var beaconManager: BeaconManager
+    @StateObject private var viewport = ViewportState()
     
     var body: some View {
         GeometryReader { geometry in
-            let baseSide = geometry.size.height
             ZStack {
-                // 1. Container (can be panned and zoomed with gestures. Everything inside moves together)
-                GeometryReader { mapGeometry in
-                    ZStack {
-                        // b. Map Image
-                        Image("myFirstFloor_v03-metric")
-                            .resizable()
-                            .aspectRatio(contentMode: .fit)
-                            .frame(maxHeight: .infinity)
-                        
-                        // Grid overlay for coordinate system testing
-                        Image("blackGrid")
-                            .resizable()
-                            .aspectRatio(contentMode: .fit)
-                            .frame(maxHeight: .infinity)
-                            .opacity(0.5) // Make it semi-transparent so we can see the map underneath
-                        
-                        // a. Beacon dots/pins placed by user (stacked above map and grid)
-                        ForEach(beaconManager.placedBeacons, id: \.name) { beacon in
-                            BeaconDot(beacon: beacon, mapContentSize: mapGeometry.size)
+                // Unified map container with all transforms applied
+                UnifiedMapView(viewport: viewport, onTap: { point in
+                    handleMapTap(at: point, containerSize: geometry.size)
+                }) {
+                    GeometryReader { mapGeometry in
+                        ZStack {
+                            // Map Image
+                            Image("myFirstFloor_v03-metric")
+                                .resizable()
+                                .aspectRatio(contentMode: .fit)
+                                .frame(maxHeight: .infinity)
+                            
+                            // Grid overlay for coordinate system testing
+                            Image("blackGrid")
+                                .resizable()
+                                .aspectRatio(contentMode: .fit)
+                                .frame(maxHeight: .infinity)
+                                .opacity(0.5) // Make it semi-transparent so we can see the map underneath
+                            
+                            // Beacon dots/pins placed by user (stacked above map and grid)
+                            ForEach(beaconManager.placedBeacons, id: \.name) { beacon in
+                                BeaconDot(beacon: beacon, mapContentSize: mapGeometry.size)
+                            }
+                            
+                            // Debug overlay - border around the map container bounds
+                            Rectangle()
+                                .stroke(Color.red, lineWidth: 2)
+                                .frame(
+                                    width: mapGeometry.size.width,
+                                    height: mapGeometry.size.height
+                                )
+                                .position(
+                                    x: mapGeometry.size.width / 2,
+                                    y: mapGeometry.size.height / 2
+                                )
                         }
-                        
-                        // Debug overlay - border around the map container bounds
-                        Rectangle()
-                            .stroke(Color.red, lineWidth: 2)
-                            .frame(
-                                width: mapGeometry.size.width,
-                                height: mapGeometry.size.height
-                            )
-                            .position(
-                                x: mapGeometry.size.width / 2,
-                                y: mapGeometry.size.height / 2
-                            )
                     }
-                    .gesture(
-                        DragGesture(minimumDistance: 0)
-                            .onChanged { value in
-                                // If drag distance is significant, treat as pan
-                                let dragDistance = sqrt(value.translation.width * value.translation.width + value.translation.height * value.translation.height)
-                                if dragDistance > 10 {
-                                    mapManager.updatePan(translation: value.translation)
-                                }
-                            }
-                            .onEnded { value in
-                                // If drag distance is small, treat as tap
-                                let dragDistance = sqrt(value.translation.width * value.translation.width + value.translation.height * value.translation.height)
-                                if dragDistance <= 10 {
-                                    let tapLocation = value.location
-                                    handleMapTap(at: tapLocation, mapContentSize: mapGeometry.size)
-                                } else {
-                                    mapManager.endPan()
-                                }
-                            }
-                    )
                 }
-                .coordinateSpace(name: "mapSpace")
-                .scaleEffect(mapManager.scale)
-                .offset(mapManager.offset)
-                .clipped()
-                .gesture(
-                    // Zoom gesture
-                    MagnificationGesture()
-                        .onChanged { value in
-                            mapManager.updateZoom(magnification: value)
-                        }
-                        .onEnded { _ in
-                            mapManager.endZoom()
-                        }
-                )
                 
                 // Armed Beacon Hint (outside the container so it doesn't move)
                 if let armedBeacon = beaconManager.armedBeacon {
@@ -123,36 +93,42 @@ struct MapView: View {
             }
         }
         .edgesIgnoringSafeArea(.all)
+        .onAppear {
+            // Sync initial state with legacy MapManager
+            viewport.scale = mapManager.scale
+            viewport.offset = mapManager.offset
+        }
+        .onChange(of: viewport.scale) { newScale in
+            mapManager.scale = newScale
+        }
+        .onChange(of: viewport.offset) { newOffset in
+            mapManager.offset = newOffset
+        }
     }
     
-    private func handleMapTap(at location: CGPoint, mapContentSize: CGSize) {
+    private func handleMapTap(at location: CGPoint, containerSize: CGSize) {
         guard let armedBeacon = beaconManager.armedBeacon else { 
             print("No armed beacon for placement")
             return 
         }
         
         print("Map tapped at: \(location)")
-        print("Map content size: \(mapContentSize)")
+        print("Container size: \(containerSize)")
         
-        // Normalize tap location within the map container's bounds
-        let normalizedLocation = CGPoint(
-            x: location.x / mapContentSize.width,
-            y: location.y / mapContentSize.height
-        )
-        
-        print("Normalized location: \(normalizedLocation)")
-        
-        // Clamp to bounds
-        let clampedLocation = CGPoint(
-            x: max(0, min(1, normalizedLocation.x)),
-            y: max(0, min(1, normalizedLocation.y))
-        )
-        
-        print("Clamped location: \(clampedLocation)")
-        
-        // Place the beacon
-        beaconManager.placeBeacon(armedBeacon, at: clampedLocation)
-        print("Beacon placed: \(armedBeacon.name)")
+        // Use the coordinate mapper to get normalized coordinates
+        Task { @MainActor in
+            let normalizedLocation = CoordinateMapper.normalizedPoint(
+                in: containerSize,
+                from: location,
+                viewport: viewport
+            )
+            
+            print("Normalized location: \(normalizedLocation)")
+            
+            // Place the beacon
+            beaconManager.placeBeacon(armedBeacon, at: normalizedLocation)
+            print("Beacon placed: \(armedBeacon.name)")
+        }
     }
 }
 
