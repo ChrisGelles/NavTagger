@@ -152,14 +152,14 @@ struct CoordinateMapper {
 
 struct GestureOrchestrator {
     let viewport: ViewportState
-    let onTap: (CGPoint) -> Void
+    let onTap: (CGPoint, CGSize) -> Void
     
     // Internal state for gesture handling
     private var panStartOffset: CGSize = .zero
     private var panStartPoint: CGPoint = .zero
     private var isPanning: Bool = false
     
-    init(viewport: ViewportState, onTap: @escaping (CGPoint) -> Void) {
+    init(viewport: ViewportState, onTap: @escaping (CGPoint, CGSize) -> Void) {
         self.viewport = viewport
         self.onTap = onTap
     }
@@ -191,10 +191,10 @@ struct GestureOrchestrator {
     }
     
     @MainActor
-    func endPan(at point: CGPoint) {
+    func endPan(at point: CGPoint, in size: CGSize) {
         if !isPanning {
             // This was a tap, not a pan
-            onTap(point)
+            onTap(point, size)
         }
     }
     

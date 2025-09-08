@@ -12,7 +12,7 @@ import UIKit
 
 struct UnifiedMapView<Content: View>: UIViewRepresentable {
     @ObservedObject var viewport: ViewportState
-    let onTap: (CGPoint) -> Void
+    let onTap: (CGPoint, CGSize) -> Void
     let content: () -> Content
     
     func makeUIView(context: Context) -> UIView {
@@ -83,8 +83,8 @@ struct UnifiedMapView<Content: View>: UIViewRepresentable {
             self.parent = parent
             self.orchestrator = GestureOrchestrator(
                 viewport: parent.viewport,
-                onTap: { point in
-                    parent.onTap(point)
+                onTap: { point, size in
+                    parent.onTap(point, size)
                 }
             )
         }
@@ -139,8 +139,9 @@ struct UnifiedMapView<Content: View>: UIViewRepresentable {
                 
             case .ended, .cancelled:
                 let point = recognizer.location(in: view)
+                let size = view.bounds.size
                 Task { @MainActor in
-                    orchestrator.endPan(at: point)
+                    orchestrator.endPan(at: point, in: size)
                 }
                 
             default:
@@ -182,7 +183,8 @@ struct UnifiedMapView<Content: View>: UIViewRepresentable {
         @objc func handleTap(_ recognizer: UITapGestureRecognizer) {
             guard let view = recognizer.view else { return }
             let point = recognizer.location(in: view)
-            parent.onTap(point)
+            let size = view.bounds.size
+            parent.onTap(point, size)
         }
         
         // MARK: - Gesture Recognizer Delegate
@@ -205,7 +207,7 @@ struct MapContainer<Content: View>: View {
     
     var body: some View {
         GeometryReader { geometry in
-            UnifiedMapView(viewport: viewport, onTap: { point in
+            UnifiedMapView(viewport: viewport, onTap: { point, size in
                 // This will be handled by the parent view
             }) {
                 // Single map container with all transforms applied

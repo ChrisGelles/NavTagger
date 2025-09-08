@@ -16,8 +16,8 @@ struct MapView: View {
         GeometryReader { geometry in
             ZStack {
                 // Unified map container with all transforms applied
-                UnifiedMapView(viewport: viewport, onTap: { point in
-                    handleMapTap(at: point, containerSize: geometry.size)
+                UnifiedMapView(viewport: viewport, onTap: { point, size in
+                    handleMapTap(at: point, containerSize: size)
                 }) {
                     GeometryReader { mapGeometry in
                         ZStack {
@@ -36,7 +36,7 @@ struct MapView: View {
                             
                             // Beacon dots/pins placed by user (stacked above map and grid)
                             ForEach(beaconManager.placedBeacons, id: \.name) { beacon in
-                                BeaconDot(beacon: beacon, mapContentSize: mapGeometry.size)
+                                BeaconDot(beacon: beacon, mapContentSize: mapGeometry.size, viewport: viewport)
                             }
                             
                             // Debug overlay - border around the map container bounds
@@ -116,7 +116,8 @@ struct MapView: View {
             return 
         }
         
-        print("Map tapped at: \(location)")
+        print("=== TAP DEBUG ===")
+        print("Tap location: \(location)")
         print("Container size: \(containerSize)")
         
         // Use the coordinate mapper to get normalized coordinates
@@ -129,6 +130,16 @@ struct MapView: View {
             
             print("Normalized location: \(normalizedLocation)")
             
+            // Sanity check: reproject back to container coordinates
+            let reprojectedLocation = CoordinateMapper.positionPoint(
+                in: containerSize,
+                normalized: normalizedLocation,
+                viewport: viewport
+            )
+            print("Reprojected location: \(reprojectedLocation)")
+            print("Difference: \(CGPoint(x: location.x - reprojectedLocation.x, y: location.y - reprojectedLocation.y))")
+            print("==================")
+            
             // Place the beacon
             beaconManager.placeBeacon(armedBeacon, at: normalizedLocation)
             print("Beacon placed: \(armedBeacon.name)")
@@ -139,9 +150,11 @@ struct MapView: View {
 struct BeaconDot: View {
     let beacon: PlacedBeacon
     let mapContentSize: CGSize
+    @ObservedObject var viewport: ViewportState
     
     var body: some View {
-        // Convert normalized coordinates to position within the map container
+        // Convert normalized coordinates to container coordinates
+        // Since beacons are inside the transformed container, we don't apply viewport transforms here
         let position = CGPoint(
             x: beacon.position.x * mapContentSize.width,
             y: beacon.position.y * mapContentSize.height
@@ -154,7 +167,10 @@ struct BeaconDot: View {
                 Circle()
                     .stroke(Color.white, lineWidth: 2)
             )
-        .position(position)
+            // Apply visual offset to account for visual center vs actual center
+            // Fixed offset since the container scaling will handle zoom scaling
+            .offset(y: -6) // Half the marker height
+            .position(position)
     }
 }
 
