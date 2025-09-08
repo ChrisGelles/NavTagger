@@ -10,7 +10,7 @@ import SwiftUI
 struct MapView: View {
     @ObservedObject var mapManager: MapManager
     @ObservedObject var beaconManager: BeaconManager
-    @StateObject private var viewport = ViewportState()
+    @ObservedObject var viewport: ViewportState
     
     var body: some View {
         GeometryReader { geometry in
@@ -52,6 +52,10 @@ struct MapView: View {
                                 )
                         }
                     }
+                    // Apply transforms to the entire map content
+                    .scaleEffect(viewport.scale, anchor: .center)
+                    .rotationEffect(.degrees(viewport.rotation))
+                    .offset(viewport.offset)
                 }
                 
                 // Armed Beacon Hint (outside the container so it doesn't move)
@@ -155,5 +159,5 @@ struct BeaconDot: View {
 }
 
 #Preview {
-    MapView(mapManager: MapManager(), beaconManager: BeaconManager())
+    MapView(mapManager: MapManager(), beaconManager: BeaconManager(), viewport: ViewportState())
 }

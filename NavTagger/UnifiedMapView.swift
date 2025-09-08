@@ -17,7 +17,7 @@ struct UnifiedMapView<Content: View>: UIViewRepresentable {
     
     func makeUIView(context: Context) -> UIView {
         let view = UIView()
-        view.backgroundColor = UIColor.clear
+        view.backgroundColor = UIColor.clear // Temporarily clear for debugging
         view.isUserInteractionEnabled = true
         view.isMultipleTouchEnabled = true
         

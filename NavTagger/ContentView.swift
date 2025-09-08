@@ -10,6 +10,7 @@ import SwiftUI
 struct ContentView: View {
     @StateObject private var mapManager = MapManager()
     @StateObject private var beaconManager = BeaconManager()
+    @StateObject private var viewport = ViewportState()
     @State private var selectedDrawer: DrawerType? = nil
     
     enum DrawerType: String, CaseIterable {
@@ -32,7 +33,7 @@ struct ContentView: View {
         GeometryReader { geometry in
             ZStack {
                 // Map View
-                MapView(mapManager: mapManager, beaconManager: beaconManager)
+                MapView(mapManager: mapManager, beaconManager: beaconManager, viewport: viewport)
                     .ignoresSafeArea()
                 
                 // Bottom Drawer System
@@ -85,7 +86,7 @@ struct ContentView: View {
                         
                         // Reset Map Position Button
                         Button(action: {
-                            mapManager.resetToInitialPosition()
+                            viewport.resetTransform()
                         }) {
                             HStack(spacing: 6) {
                                 Image(systemName: "arrow.clockwise")
