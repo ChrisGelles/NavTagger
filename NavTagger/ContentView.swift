@@ -64,14 +64,14 @@ struct ContentView: View {
                         Button(action: {
                             beaconManager.copyBeaconLocationsToClipboard()
                         }) {
-                            HStack(spacing: 6) {
+                            VStack(spacing: 3) {
                                 Image(systemName: "doc.on.clipboard")
-                                    .font(.system(size: 14, weight: .medium))
+                                    .font(.system(size: 9, weight: .medium))
                                 Text("Copy")
-                                    .font(.system(size: 12, weight: .medium))
+                                    .font(.system(size: 9, weight: .medium))
                             }
                             .foregroundColor(.blue)
-                            .padding(.horizontal, 12)
+                            .padding(.horizontal, 9)
                             .padding(.vertical, 8)
                             .background(
                                 RoundedRectangle(cornerRadius: 16)
@@ -79,6 +79,48 @@ struct ContentView: View {
                                     .overlay(
                                         RoundedRectangle(cornerRadius: 16)
                                             .stroke(Color.blue.opacity(0.3), lineWidth: 1)
+                                    )
+                            )
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                        
+                        // Add 1m Square Button
+                        Button(action: {
+                            if mapManager.metricSquare == nil {
+                                // Get the center of the current GeometryReader's frame (i.e., the screen center)
+                                let screenCenter = CGPoint(x: geometry.size.width / 2, y: geometry.size.height / 2)
+                                
+                                // Convert this screen-relative center to normalized map coordinates
+                                // This requires the full container size, which is `geometry.size` in this context.
+                                Task { @MainActor in // CoordinateMapper is marked @MainActor
+                                    let normalizedCenter = CoordinateMapper.normalizedPoint(
+                                        in: geometry.size, // Pass the actual size of the container where gestures happen
+                                        from: screenCenter,
+                                        viewport: viewport
+                                    )
+                                    mapManager.createMetricSquare(at: normalizedCenter)
+                                    mapManager.startEditingMetricSquare() // Automatically enter edit mode
+                                }
+                            } else {
+                                // Toggle selection or remove
+                                mapManager.removeMetricSquare()
+                            }
+                        }) {
+                            HStack(spacing: 6) {
+                                Image(systemName: mapManager.metricSquare == nil ? "square" : "square.fill")
+                                    .font(.system(size: 9, weight: .medium))
+                                Text(mapManager.metricSquare == nil ? "Add 1m" : "Remove")
+                                    .font(.system(size: 9, weight: .medium))
+                            }
+                            .foregroundColor(.green)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(
+                                RoundedRectangle(cornerRadius: 16)
+                                    .fill(Color.green.opacity(0.1))
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 16)
+                                            .stroke(Color.green.opacity(0.3), lineWidth: 1)
                                     )
                             )
                         }
@@ -92,7 +134,7 @@ struct ContentView: View {
                                 Image(systemName: "arrow.clockwise")
                                     .font(.system(size: 14, weight: .medium))
                                 Text("Reset")
-                                    .font(.system(size: 12, weight: .medium))
+                                    .font(.system(size: 9, weight: .medium))
                             }
                             .foregroundColor(.orange)
                             .padding(.horizontal, 12)
@@ -116,7 +158,7 @@ struct ContentView: View {
                                 Image(systemName: "trash")
                                     .font(.system(size: 14, weight: .medium))
                                 Text("Clear")
-                                    .font(.system(size: 12, weight: .medium))
+                                    .font(.system(size: 9, weight: .medium))
                             }
                             .foregroundColor(.red)
                             .padding(.horizontal, 12)
@@ -163,11 +205,11 @@ struct DrawerTab: View {
     
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 8) {
+            VStack(spacing: 8) {
                 Image(systemName: type.icon)
-                    .font(.system(size: 16, weight: .medium))
+                    .font(.system(size: 14, weight: .medium))
                 Text(type.title)
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.system(size: 9, weight: .medium))
             }
             .foregroundColor(isSelected ? .white : .primary)
             .padding(.horizontal, 16)

@@ -16,7 +16,7 @@ struct MapView: View {
         GeometryReader { geometry in
             ZStack {
                 // Unified map container with all transforms applied
-                UnifiedMapView(viewport: viewport, onTap: { point, size in
+                UnifiedMapView(viewport: viewport, isEditingMetricSquare: mapManager.isEditingMetricSquare, onTap: { point, size in
                     handleMapTap(at: point, containerSize: size)
                 }) {
                     GeometryReader { mapGeometry in
@@ -37,6 +37,23 @@ struct MapView: View {
                             // Beacon dots/pins placed by user (stacked above map and grid)
                             ForEach(beaconManager.placedBeacons, id: \.name) { beacon in
                                 BeaconDot(beacon: beacon, mapContentSize: mapGeometry.size, viewport: viewport)
+                            }
+                            
+                            // Metric square overlay (above beacons)
+                            if let metricSquare = mapManager.metricSquare {
+                                MetricSquareView(
+                                    square: metricSquare,
+                                    mapContentSize: mapGeometry.size,
+                                    viewport: viewport,
+                                    mapManager: mapManager,
+                                    onMove: { newCenter in
+                                        mapManager.updateMetricSquareCenter(newCenter)
+                                    },
+                                    onResize: { newSide in
+                                        mapManager.updateMetricSquareSide(newSide)
+                                    }
+                                )
+                                .allowsHitTesting(mapManager.isEditingMetricSquare)
                             }
                             
                             // Debug overlay - border around the map container bounds
@@ -171,6 +188,214 @@ struct BeaconDot: View {
             // Fixed offset since the container scaling will handle zoom scaling
             .offset(y: -6) // Half the marker height
             .position(position)
+    }
+}
+
+struct MetricSquareView: View {
+    let square: MetricSquare
+    let mapContentSize: CGSize
+    @ObservedObject var viewport: ViewportState
+    @ObservedObject var mapManager: MapManager
+    let onMove: (CGPoint) -> Void
+    let onResize: (CGFloat) -> Void
+    
+    @State private var isSelected = false
+    @State private var dragState: SquareDragState = .none
+    @State private var originalCenter: CGPoint = .zero
+    @State private var originalSide: CGFloat = 0
+    
+    enum SquareDragState: Equatable {
+        case none
+        case moving
+        case resizing(corner: Corner)
+    }
+    
+    enum Corner: Equatable {
+        case topLeft, topRight, bottomLeft, bottomRight
+    }
+    
+    // Gesture damping constants
+    private let gestureDamping: CGFloat = 0.7
+    private let gestureThreshold: CGFloat = 8
+    
+    var body: some View {
+        let centerPosition = CoordinateMapper.positionPoint(
+            in: mapContentSize,
+            normalized: square.center,
+            viewport: viewport
+        )
+        
+        let halfSide = (square.side * mapContentSize.width) / 2
+        let squareFrame = CGRect(
+            x: centerPosition.x - halfSide,
+            y: centerPosition.y - halfSide,
+            width: halfSide * 2,
+            height: halfSide * 2
+        )
+        
+        // Handle size - small visual, large hit area
+        let handleSize: CGFloat = 12
+        let hitAreaSize: CGFloat = 32
+        
+        ZStack {
+            // Main square
+            Rectangle()
+                .fill(Color.blue.opacity(0.2))
+                .overlay(
+                    Rectangle()
+                        .stroke(Color.blue, lineWidth: 2)
+                )
+                .frame(width: squareFrame.width, height: squareFrame.height)
+                .position(centerPosition)
+                .onTapGesture {
+                    if mapManager.isEditingMetricSquare {
+                        isSelected.toggle()
+                    } else {
+                        mapManager.startEditingMetricSquare()
+                        isSelected = true
+                    }
+                }
+            
+            // Center handle for moving
+            Circle()
+                .fill(isSelected ? Color.blue : Color.blue.opacity(0.6))
+                .frame(width: handleSize, height: handleSize)
+                .position(centerPosition)
+                .contentShape(Rectangle())
+                .frame(width: hitAreaSize, height: hitAreaSize)
+                .gesture(
+                    DragGesture()
+                        .onChanged { value in
+                            if dragState == SquareDragState.none {
+                                // Check threshold to avoid tap-becomes-drag jitter
+                                let distance = sqrt(pow(value.translation.width, 2) + pow(value.translation.height, 2))
+                                if distance < gestureThreshold {
+                                    return
+                                }
+                                dragState = .moving
+                                originalCenter = square.center
+                            }
+                            
+                            if case .moving = dragState {
+                                // Convert screen point to container point using inverse transform
+                                let screenPoint = CGPoint(
+                                    x: centerPosition.x + value.translation.width,
+                                    y: centerPosition.y + value.translation.height
+                                )
+                                
+                                let containerPoint = CoordinateMapper.normalizedPoint(
+                                    in: mapContentSize,
+                                    from: screenPoint,
+                                    viewport: viewport
+                                )
+                                
+                                // Calculate normalized delta with damping
+                                let dxNorm = (containerPoint.x - originalCenter.x) * gestureDamping
+                                let dyNorm = (containerPoint.y - originalCenter.y) * gestureDamping
+                                
+                                let newCenter = CGPoint(
+                                    x: max(0, min(1, originalCenter.x + dxNorm)),
+                                    y: max(0, min(1, originalCenter.y + dyNorm))
+                                )
+                                
+                                #if DEBUG
+                                print("=== METER BOX MOVE DEBUG ===")
+                                print("screenPoint: \(screenPoint)")
+                                print("containerPoint: \(containerPoint)")
+                                print("originalCenter: \(originalCenter)")
+                                print("dxNorm: \(dxNorm), dyNorm: \(dyNorm)")
+                                print("newCenter: \(newCenter)")
+                                print("=============================")
+                                #endif
+                                
+                                onMove(newCenter)
+                            }
+                        }
+                        .onEnded { _ in
+                            dragState = SquareDragState.none
+                        }
+                )
+            
+            // Corner handles for resizing
+            ForEach([Corner.topLeft, .topRight, .bottomLeft, .bottomRight], id: \.self) { corner in
+                let cornerPosition = cornerPosition(for: corner, in: squareFrame)
+                
+                Circle()
+                    .fill(isSelected ? Color.blue : Color.blue.opacity(0.6))
+                    .frame(width: handleSize, height: handleSize)
+                    .position(cornerPosition)
+                    .contentShape(Rectangle())
+                    .frame(width: hitAreaSize, height: hitAreaSize)
+                    .gesture(
+                        DragGesture()
+                            .onChanged { value in
+                                if dragState == SquareDragState.none {
+                                    // Check threshold to avoid tap-becomes-drag jitter
+                                    let distance = sqrt(pow(value.translation.width, 2) + pow(value.translation.height, 2))
+                                    if distance < gestureThreshold {
+                                        return
+                                    }
+                                    dragState = .resizing(corner: corner)
+                                    originalSide = square.side
+                                }
+                                
+                                if case .resizing = dragState {
+                                    // Convert screen point to container point using inverse transform
+                                    let screenPoint = CGPoint(
+                                        x: cornerPosition.x + value.translation.width,
+                                        y: cornerPosition.y + value.translation.height
+                                    )
+                                    
+                                    let containerPoint = CoordinateMapper.normalizedPoint(
+                                        in: mapContentSize,
+                                        from: screenPoint,
+                                        viewport: viewport
+                                    )
+                                    
+                                    // Calculate normalized change with damping
+                                    let dx = containerPoint.x - square.center.x
+                                    let dy = containerPoint.y - square.center.y
+                                    let delta = max(abs(dx), abs(dy)) * gestureDamping
+                                    
+                                    // Preserve sign based on corner direction
+                                    let signedDelta = (dx > 0 || dy > 0) ? delta : -delta
+                                    
+                                    // Update side only (center stays constant)
+                                    let newSide = max(0.01, min(0.5, originalSide + signedDelta))
+                                    onResize(newSide)
+                                }
+                            }
+                            .onEnded { _ in
+                                dragState = SquareDragState.none
+                            }
+                    )
+            }
+            
+            // Size label
+            Text("1.00 m")
+                .font(.caption)
+                .foregroundColor(.blue)
+                .padding(4)
+                .background(
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(Color.white.opacity(0.8))
+                )
+                .position(x: centerPosition.x, y: centerPosition.y - squareFrame.height/2 - 20)
+        }
+        .zIndex(1) // Ensure it's above other elements
+    }
+    
+    private func cornerPosition(for corner: Corner, in frame: CGRect) -> CGPoint {
+        switch corner {
+        case .topLeft:
+            return CGPoint(x: frame.minX, y: frame.minY)
+        case .topRight:
+            return CGPoint(x: frame.maxX, y: frame.minY)
+        case .bottomLeft:
+            return CGPoint(x: frame.minX, y: frame.maxY)
+        case .bottomRight:
+            return CGPoint(x: frame.maxX, y: frame.maxY)
+        }
     }
 }
 

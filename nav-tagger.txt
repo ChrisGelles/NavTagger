@@ -1,0 +1,1806 @@
+//
+//  BeaconDrawer.swift
+//  NavTagger
+//
+//  Created by Chris Gelles on 9/6/25.
+//
+
+import SwiftUI
+
+struct BeaconDrawer: View {
+    @ObservedObject var beaconManager: BeaconManager
+    @ObservedObject var mapManager: MapManager
+    let geometry: GeometryProxy
+    
+    private let columns = [
+        GridItem(.adaptive(minimum: 80), spacing: 8)
+    ]
+    
+    var body: some View {
+        VStack(spacing: 8) {
+            // Beacon Grid
+            if beaconManager.availableBeacons.isEmpty {
+                Text("No beacons found")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, 20)
+            } else {
+                LazyVGrid(columns: columns, spacing: 8) {
+                    ForEach(beaconManager.availableBeacons, id: \.name) { beacon in
+                        BeaconButton(
+                            beacon: beacon,
+                            isArmed: beaconManager.armedBeacon?.name == beacon.name,
+                            isPlaced: beaconManager.placedBeacons.contains { $0.name == beacon.name },
+                            action: {
+                                if beaconManager.armedBeacon?.name == beacon.name {
+                                    beaconManager.cancelArmedBeacon()
+                                } else {
+                                    beaconManager.armBeacon(beacon)
+                                }
+                            }
+                        )
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 16)
+                .fill(Color(.systemBackground))
+                .shadow(color: .black.opacity(0.1), radius: 10, x: 0, y: -5)
+        )
+        .frame(maxHeight: geometry.size.height * 0.2)
+    }
+}
+
+struct BeaconButton: View {
+    let beacon: BeaconInfo
+    let isArmed: Bool
+    let isPlaced: Bool
+    let action: () -> Void
+    
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 8) {
+                // Beacon Icon
+                ZStack {
+                    Circle()
+                        .fill(beacon.color)
+                        .frame(width: 28, height: 28)
+                    
+                    if isPlaced {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundColor(.white)
+                    } else {
+                        Image(systemName: "target")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(.white)
+                    }
+                }
+                
+                // Beacon Name
+                Text(beacon.name)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(.primary)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                
+                // Status Indicator
+                if isArmed {
+                    Text("Ready")
+                        .font(.caption2)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(Color.accentColor)
+                        )
+                } else if isPlaced {
+                    Text("Placed")
+                        .font(.caption2)
+                        .foregroundColor(beacon.color)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(beacon.color.opacity(0.1))
+                        )
+                }
+            }
+            .padding(.vertical, 8)
+            .padding(.horizontal, 6)
+            .frame(maxWidth: .infinity)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(isArmed ? beacon.color.opacity(0.1) : Color(.systemGray6))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(isArmed ? beacon.color : Color.clear, lineWidth: 2)
+                    )
+            )
+        }
+        .buttonStyle(PlainButtonStyle())
+    }
+}
+
+struct PlacedBeaconChip: View {
+    let beacon: PlacedBeacon
+    
+    var body: some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(beacon.color)
+                .frame(width: 8, height: 8)
+            
+            Text(beacon.name)
+                .font(.caption)
+                .foregroundColor(.primary)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color(.systemGray5))
+        )
+    }
+}
+
+#Preview {
+    GeometryReader { geometry in
+        BeaconDrawer(
+            beaconManager: BeaconManager(),
+            mapManager: MapManager(),
+            geometry: geometry
+        )
+    }
+    .frame(width: 400, height: 600)
+}
+
+
+//
+//  BeaconManager.swift
+//  NavTagger
+//
+//  Created by Chris Gelles on 9/6/25.
+//
+
+import SwiftUI
+import Foundation
+
+// MARK: - Data Models
+struct BeaconInfo: Identifiable, Hashable {
+    let id = UUID()
+    let name: String
+    let color: Color
+    
+    static func == (lhs: BeaconInfo, rhs: BeaconInfo) -> Bool {
+        lhs.name == rhs.name
+    }
+    
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(name)
+    }
+}
+
+struct PlacedBeacon: Identifiable {
+    let id = UUID()
+    let name: String
+    let position: CGPoint // Normalized coordinates (0-1)
+    let color: Color
+}
+
+// MARK: - Beacon Manager
+class BeaconManager: ObservableObject {
+    @Published var availableBeacons: [BeaconInfo] = []
+    @Published var placedBeacons: [PlacedBeacon] = []
+    @Published var armedBeacon: BeaconInfo? = nil
+    
+    private let colorPalette: [Color] = [
+        .red, .blue, .green, .orange, .purple, .pink, .yellow, .cyan,
+        .mint, .indigo, .brown, .gray, .teal, .primary, .secondary
+    ]
+    
+    private let persistenceKey = "placedBeacons"
+    private let sharedUserDefaults = UserDefaults(suiteName: "group.com.cmnh.beaconapps") ?? UserDefaults.standard
+    
+    init() {
+        loadPlacedBeacons()
+    }
+    
+    // MARK: - Whitelist Loading
+    func loadBeaconWhitelist() {
+        guard let url = Bundle.main.url(forResource: "beacon_whitelist", withExtension: "txt") else {
+            print("Beacon whitelist file not found")
+            return
+        }
+        
+        do {
+            let content = try String(contentsOf: url, encoding: .utf8)
+            let lines = content.components(separatedBy: .newlines)
+            
+            var beacons: [BeaconInfo] = []
+            var colorIndex = 0
+            
+            for line in lines {
+                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                
+                // Skip empty lines and comments
+                if trimmed.isEmpty || trimmed.hasPrefix("#") {
+                    continue
+                }
+                
+                let color = colorPalette[colorIndex % colorPalette.count]
+                beacons.append(BeaconInfo(name: trimmed, color: color))
+                colorIndex += 1
+            }
+            
+            DispatchQueue.main.async {
+                self.availableBeacons = beacons
+                self.cleanupInvalidPlacements()
+            }
+            
+        } catch {
+            print("Error loading beacon whitelist: \(error)")
+        }
+    }
+    
+    // MARK: - Beacon Placement
+    func armBeacon(_ beacon: BeaconInfo) {
+        armedBeacon = beacon
+    }
+    
+    func cancelArmedBeacon() {
+        armedBeacon = nil
+    }
+    
+    func placeBeacon(_ beacon: BeaconInfo, at position: CGPoint) {
+        // Remove any existing placement for this beacon
+        placedBeacons.removeAll { $0.name == beacon.name }
+        
+        // Add new placement
+        let placedBeacon = PlacedBeacon(
+            name: beacon.name,
+            position: position,
+            color: beacon.color
+        )
+        placedBeacons.append(placedBeacon)
+        
+        // Clear armed state
+        armedBeacon = nil
+        
+        // Save to persistence
+        savePlacedBeacons()
+    }
+    
+    // MARK: - Persistence
+    private func savePlacedBeacons() {
+        let data = placedBeacons.map { beacon in
+            [
+                "name": beacon.name,
+                "x": beacon.position.x,
+                "y": beacon.position.y,
+                "colorRed": UIColor(beacon.color).red,
+                "colorGreen": UIColor(beacon.color).green,
+                "colorBlue": UIColor(beacon.color).blue,
+                "colorAlpha": UIColor(beacon.color).alpha
+            ]
+        }
+        
+        sharedUserDefaults.set(data, forKey: persistenceKey)
+    }
+    
+    private func loadPlacedBeacons() {
+        guard let data = sharedUserDefaults.array(forKey: persistenceKey) as? [[String: Any]] else {
+            print("No saved beacon placements found.")
+            return
+        }
+        
+        var loadedBeacons: [PlacedBeacon] = []
+        
+        for beaconData in data {
+            guard let name = beaconData["name"] as? String,
+                  let x = beaconData["x"] as? CGFloat,
+                  let y = beaconData["y"] as? CGFloat,
+                  let red = beaconData["colorRed"] as? CGFloat,
+                  let green = beaconData["colorGreen"] as? CGFloat,
+                  let blue = beaconData["colorBlue"] as? CGFloat,
+                  let alpha = beaconData["colorAlpha"] as? CGFloat else {
+                continue
+            }
+            
+            let position = CGPoint(x: x, y: y)
+            let color = Color(UIColor(red: red, green: green, blue: blue, alpha: alpha))
+            
+            let placedBeacon = PlacedBeacon(
+                name: name,
+                position: position,
+                color: color
+            )
+            loadedBeacons.append(placedBeacon)
+        }
+        
+        placedBeacons = loadedBeacons
+        print("Loaded \(loadedBeacons.count) beacon placements from storage.")
+    }
+    
+    func clearAllPlacements() {
+        placedBeacons = []
+        savePlacedBeacons()
+        print("Cleared all beacon placements.")
+    }
+    
+    private func cleanupInvalidPlacements() {
+        let validNames = Set(availableBeacons.map { $0.name })
+        placedBeacons.removeAll { !validNames.contains($0.name) }
+        savePlacedBeacons()
+    }
+    
+    // MARK: - Debug Export
+    func copyBeaconLocationsToClipboard() {
+        var formattedText = ""
+        
+        for beacon in placedBeacons {
+            formattedText += "\(beacon.name):\n"
+            formattedText += "  X: \(beacon.position.x)\n"
+            formattedText += "  Y: \(beacon.position.y)\n"
+            formattedText += "\n"
+        }
+        
+        // Remove the last newline
+        if !formattedText.isEmpty {
+            formattedText = String(formattedText.dropLast())
+        }
+        
+        // Copy to clipboard
+        UIPasteboard.general.string = formattedText
+        
+        print("Beacon locations copied to clipboard:")
+        print(formattedText)
+    }
+}
+
+// MARK: - Color Extension
+extension UIColor {
+    var red: CGFloat {
+        var red: CGFloat = 0
+        getRed(&red, green: nil, blue: nil, alpha: nil)
+        return red
+    }
+    
+    var green: CGFloat {
+        var green: CGFloat = 0
+        getRed(nil, green: &green, blue: nil, alpha: nil)
+        return green
+    }
+    
+    var blue: CGFloat {
+        var blue: CGFloat = 0
+        getRed(nil, green: nil, blue: &blue, alpha: nil)
+        return blue
+    }
+    
+    var alpha: CGFloat {
+        var alpha: CGFloat = 0
+        getRed(nil, green: nil, blue: nil, alpha: &alpha)
+        return alpha
+    }
+}
+
+
+//
+//  ContentView.swift
+//  NavTagger
+//
+//  Created by Chris Gelles on 9/6/25.
+//
+
+import SwiftUI
+
+struct ContentView: View {
+    @StateObject private var mapManager = MapManager()
+    @StateObject private var beaconManager = BeaconManager()
+    @StateObject private var viewport = ViewportState()
+    @State private var selectedDrawer: DrawerType? = nil
+    
+    enum DrawerType: String, CaseIterable {
+        case beacons = "beacons"
+        
+        var icon: String {
+            switch self {
+            case .beacons: return "target"
+            }
+        }
+        
+        var title: String {
+            switch self {
+            case .beacons: return "Beacons"
+            }
+        }
+    }
+    
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack {
+                // Map View
+                MapView(mapManager: mapManager, beaconManager: beaconManager, viewport: viewport)
+                    .ignoresSafeArea()
+                
+                // Bottom Drawer System
+                VStack {
+                    Spacer()
+                    
+                    // Drawer Tabs and Clear Button
+                    HStack(spacing: 12) {
+                        ForEach(DrawerType.allCases, id: \.self) { drawerType in
+                            DrawerTab(
+                                type: drawerType,
+                                isSelected: selectedDrawer == drawerType,
+                                action: {
+                                    withAnimation(.easeInOut(duration: 0.3)) {
+                                        if selectedDrawer == drawerType {
+                                            selectedDrawer = nil
+                                        } else {
+                                            selectedDrawer = drawerType
+                                        }
+                                    }
+                                }
+                            )
+                        }
+                        
+                        Spacer()
+                        
+                        // Copy Beacon Locations Button
+                        Button(action: {
+                            beaconManager.copyBeaconLocationsToClipboard()
+                        }) {
+                            VStack(spacing: 3) {
+                                Image(systemName: "doc.on.clipboard")
+                                    .font(.system(size: 9, weight: .medium))
+                                Text("Copy")
+                                    .font(.system(size: 9, weight: .medium))
+                            }
+                            .foregroundColor(.blue)
+                            .padding(.horizontal, 9)
+                            .padding(.vertical, 8)
+                            .background(
+                                RoundedRectangle(cornerRadius: 16)
+                                    .fill(Color.blue.opacity(0.1))
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 16)
+                                            .stroke(Color.blue.opacity(0.3), lineWidth: 1)
+                                    )
+                            )
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                        
+                        // Add 1m Square Button
+                        Button(action: {
+                            if mapManager.metricSquare == nil {
+                                // Create square at center of current view
+                                let center = CGPoint(x: 0.5, y: 0.5) // Normalized center
+                                mapManager.createMetricSquare(at: center)
+                            } else {
+                                // Toggle selection or remove
+                                mapManager.removeMetricSquare()
+                            }
+                        }) {
+                            HStack(spacing: 6) {
+                                Image(systemName: mapManager.metricSquare == nil ? "square" : "square.fill")
+                                    .font(.system(size: 9, weight: .medium))
+                                Text(mapManager.metricSquare == nil ? "Add 1m" : "Remove")
+                                    .font(.system(size: 9, weight: .medium))
+                            }
+                            .foregroundColor(.green)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(
+                                RoundedRectangle(cornerRadius: 16)
+                                    .fill(Color.green.opacity(0.1))
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 16)
+                                            .stroke(Color.green.opacity(0.3), lineWidth: 1)
+                                    )
+                            )
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                        
+                        // Done Button (when editing metric square)
+                        if mapManager.isEditingMetricSquare {
+                            Button(action: {
+                                mapManager.stopEditingMetricSquare()
+                            }) {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "checkmark")
+                                        .font(.system(size: 10, weight: .medium))
+                                    Text("Done")
+                                        .font(.system(size: 10, weight: .medium))
+                                }
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 8)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 16)
+                                        .fill(Color.blue)
+                                )
+                            }
+                            .buttonStyle(PlainButtonStyle())
+                        }
+                        
+                        // Reset Map Position Button
+                        Button(action: {
+                            viewport.resetTransform()
+                        }) {
+                            HStack(spacing: 6) {
+                                Image(systemName: "arrow.clockwise")
+                                    .font(.system(size: 14, weight: .medium))
+                                Text("Reset")
+                                    .font(.system(size: 9, weight: .medium))
+                            }
+                            .foregroundColor(.orange)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(
+                                RoundedRectangle(cornerRadius: 16)
+                                    .fill(Color.orange.opacity(0.1))
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 16)
+                                            .stroke(Color.orange.opacity(0.3), lineWidth: 1)
+                                    )
+                            )
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                        
+                        // Clear Beacon Positions Button
+                        Button(action: {
+                            beaconManager.clearAllPlacements()
+                        }) {
+                            HStack(spacing: 6) {
+                                Image(systemName: "trash")
+                                    .font(.system(size: 14, weight: .medium))
+                                Text("Clear")
+                                    .font(.system(size: 9, weight: .medium))
+                            }
+                            .foregroundColor(.red)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(
+                                RoundedRectangle(cornerRadius: 16)
+                                    .fill(Color.red.opacity(0.1))
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 16)
+                                            .stroke(Color.red.opacity(0.3), lineWidth: 1)
+                                    )
+                            )
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 10)
+                    
+                    // Drawer Content
+                    if let selectedDrawer = selectedDrawer {
+                        DrawerContent(
+                            type: selectedDrawer,
+                            mapManager: mapManager,
+                            beaconManager: beaconManager,
+                            geometry: geometry
+                        )
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
+                }
+            }
+        }
+        .onAppear {
+            mapManager.requestLocationPermission()
+            mapManager.setInitialZoom()
+            beaconManager.loadBeaconWhitelist()
+        }
+    }
+}
+
+struct DrawerTab: View {
+    let type: ContentView.DrawerType
+    let isSelected: Bool
+    let action: () -> Void
+    
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 8) {
+                Image(systemName: type.icon)
+                    .font(.system(size: 14, weight: .medium))
+                Text(type.title)
+                    .font(.system(size: 9, weight: .medium))
+            }
+            .foregroundColor(isSelected ? .white : .primary)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(
+                RoundedRectangle(cornerRadius: 20)
+                    .fill(isSelected ? Color.accentColor : Color(.systemGray5))
+            )
+        }
+        .buttonStyle(PlainButtonStyle())
+    }
+}
+
+struct DrawerContent: View {
+    let type: ContentView.DrawerType
+    let mapManager: MapManager
+    let beaconManager: BeaconManager
+    let geometry: GeometryProxy
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            // Drawer Handle
+            RoundedRectangle(cornerRadius: 2)
+                .fill(Color(.systemGray3))
+                .frame(width: 40, height: 4)
+                .padding(.top, 8)
+                .padding(.bottom, 16)
+            
+            // Drawer Content
+            switch type {
+            case .beacons:
+                BeaconDrawer(
+                    beaconManager: beaconManager,
+                    mapManager: mapManager,
+                    geometry: geometry
+                )
+            }
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 16)
+                .fill(Color(.systemBackground))
+                .shadow(color: .black.opacity(0.1), radius: 10, x: 0, y: -5)
+        )
+        .frame(maxHeight: geometry.size.height * 0.2)
+    }
+}
+
+#Preview {
+    ContentView()
+}
+
+
+//
+//  MapManager.swift
+//  NavTagger
+//
+//  Created by Chris Gelles on 9/6/25.
+//
+
+import SwiftUI
+import CoreLocation
+
+// MARK: - Metric Square Model
+
+struct MetricSquare {
+    var center: CGPoint  // Normalized coordinates (0...1)
+    var side: CGFloat    // Normalized side length (0...1)
+    
+    init(center: CGPoint, side: CGFloat) {
+        self.center = center
+        self.side = side
+    }
+}
+
+class MapManager: NSObject, ObservableObject {
+    // Map state
+    @Published var scale: CGFloat = 1.0
+    @Published var offset: CGSize = .zero
+    
+    // Metric square state
+    @Published var metricSquare: MetricSquare?
+    @Published var isEditingMetricSquare: Bool = false
+    
+    // Bounds checking
+    private let minScale: CGFloat = 0.5
+    private let maxScale: CGFloat = 10.0  // Increased max zoom
+    private let maxOffset: CGFloat = 500.0
+    
+    // Gesture state
+    private var lastPanOffset: CGSize = .zero
+    private var lastScale: CGFloat = 1.0
+    
+    // Location manager
+    private let locationManager = CLLocationManager()
+    
+    override init() {
+        super.init()
+        locationManager.delegate = self
+        locationManager.desiredAccuracy = kCLLocationAccuracyBest
+    }
+    
+    // MARK: - Gesture Handling
+    func updatePan(translation: CGSize) {
+        let newOffset = CGSize(
+            width: lastPanOffset.width + translation.width,
+            height: lastPanOffset.height + translation.height
+        )
+        
+        // Apply bounds checking
+        let clampedOffset = clampOffset(newOffset)
+        offset = clampedOffset
+    }
+    
+    func endPan() {
+        lastPanOffset = offset
+    }
+    
+    func updateZoom(magnification: CGFloat) {
+        let newScale = lastScale * magnification
+        scale = clampScale(newScale)
+    }
+    
+    func endZoom() {
+        lastScale = scale
+    }
+    
+    // MARK: - Bounds Checking
+    private func clampScale(_ newScale: CGFloat) -> CGFloat {
+        return max(minScale, min(maxScale, newScale))
+    }
+    
+    private func clampOffset(_ newOffset: CGSize) -> CGSize {
+        let maxOffsetValue = maxOffset * scale
+        return CGSize(
+            width: max(-maxOffsetValue, min(maxOffsetValue, newOffset.width)),
+            height: max(-maxOffsetValue, min(maxOffsetValue, newOffset.height))
+        )
+    }
+    
+    // MARK: - Map Frame Calculation
+    func getMapSize(in geometry: GeometryProxy) -> CGSize {
+        let screenSize = geometry.size
+        let imageAspectRatio: CGFloat = 1.0 // Square image (2048x2048)
+        
+        // Always fit to screen height (top to bottom)
+        let mapSize = CGSize(
+            width: screenSize.height * imageAspectRatio,
+            height: screenSize.height
+        )
+        
+        // Apply scale
+        return CGSize(
+            width: mapSize.width * scale,
+            height: mapSize.height * scale
+        )
+    }
+    
+    func getDisplayedMapRect(in geometry: GeometryProxy) -> CGRect {
+        let screenSize = geometry.size
+        let imageAspectRatio: CGFloat = 1.0 // Square image (2048x2048)
+        
+        // Always fit to screen height (top to bottom) - matches the view's .frame(maxHeight: .infinity)
+        let mapSize = CGSize(
+            width: screenSize.height * imageAspectRatio,
+            height: screenSize.height
+        )
+        
+        // Center horizontally - matches the view's aspectRatio(.fit) behavior
+        let mapOrigin = CGPoint(
+            x: (screenSize.width - mapSize.width) / 2,
+            y: 0
+        )
+        
+        // Apply scale and offset - matches the view's .scaleEffect and .offset
+        let scaledSize = CGSize(
+            width: mapSize.width * scale,
+            height: mapSize.height * scale
+        )
+        
+        let scaledOrigin = CGPoint(
+            x: mapOrigin.x + offset.width,
+            y: mapOrigin.y + offset.height
+        )
+        
+        return CGRect(origin: scaledOrigin, size: scaledSize)
+    }
+    
+    // Keep the old method for backward compatibility
+    func getMapFrame(in geometry: GeometryProxy) -> CGRect {
+        return getDisplayedMapRect(in: geometry)
+    }
+    
+    // MARK: - Location Permission
+    func requestLocationPermission() {
+        locationManager.requestWhenInUseAuthorization()
+    }
+    
+    // MARK: - Reset
+    func resetMap() {
+        scale = 1.0
+        offset = .zero
+        lastScale = 1.0
+        lastPanOffset = .zero
+    }
+    
+    // MARK: - Initial Setup
+    func setInitialZoom() {
+        // Set initial zoom to fill screen height
+        scale = 1.0
+        lastScale = 1.0
+        offset = .zero
+        lastPanOffset = .zero
+    }
+    
+    func resetToInitialPosition() {
+        // Reset to initial zoom and pan values
+        scale = 1.0
+        lastScale = 1.0
+        offset = .zero
+        lastPanOffset = .zero
+    }
+    
+    // MARK: - Metric Square Management
+    
+    func createMetricSquare(at center: CGPoint, side: CGFloat = 0.05) {
+        metricSquare = MetricSquare(center: center, side: side)
+    }
+    
+    func removeMetricSquare() {
+        metricSquare = nil
+        isEditingMetricSquare = false
+    }
+    
+    func updateMetricSquareCenter(_ newCenter: CGPoint) {
+        guard var square = metricSquare else { return }
+        square.center = newCenter
+        metricSquare = square
+    }
+    
+    func updateMetricSquareSide(_ newSide: CGFloat) {
+        guard var square = metricSquare else { return }
+        // Clamp side to reasonable bounds (1% to 50% of map)
+        let clampedSide = max(0.01, min(0.5, newSide))
+        square.side = clampedSide
+        metricSquare = square
+    }
+    
+    func startEditingMetricSquare() {
+        isEditingMetricSquare = true
+    }
+    
+    func stopEditingMetricSquare() {
+        isEditingMetricSquare = false
+    }
+}
+
+// MARK: - CLLocationManagerDelegate
+extension MapManager: CLLocationManagerDelegate {
+    func locationManager(_ manager: CLLocationManager, didChangeAuthorization status: CLAuthorizationStatus) {
+        switch status {
+        case .authorizedWhenInUse, .authorizedAlways:
+            print("Location permission granted")
+        case .denied, .restricted:
+            print("Location permission denied")
+        case .notDetermined:
+            print("Location permission not determined")
+        @unknown default:
+            print("Unknown location permission status")
+        }
+    }
+    
+    func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+        print("Location manager failed with error: \(error.localizedDescription)")
+    }
+}
+
+
+//
+//  MapView.swift
+//  NavTagger
+//
+//  Created by Chris Gelles on 9/6/25.
+//
+
+import SwiftUI
+
+struct MapView: View {
+    @ObservedObject var mapManager: MapManager
+    @ObservedObject var beaconManager: BeaconManager
+    @ObservedObject var viewport: ViewportState
+    
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack {
+                // Unified map container with all transforms applied
+                UnifiedMapView(viewport: viewport, isEditingMetricSquare: mapManager.isEditingMetricSquare, onTap: { point, size in
+                    handleMapTap(at: point, containerSize: size)
+                }) {
+                    GeometryReader { mapGeometry in
+                        ZStack {
+                            // Map Image
+                            Image("myFirstFloor_v03-metric")
+                                .resizable()
+                                .aspectRatio(contentMode: .fit)
+                                .frame(maxHeight: .infinity)
+                            
+                            // Grid overlay for coordinate system testing
+                            Image("blackGrid")
+                                .resizable()
+                                .aspectRatio(contentMode: .fit)
+                                .frame(maxHeight: .infinity)
+                                .opacity(0.5) // Make it semi-transparent so we can see the map underneath
+                            
+                            // Beacon dots/pins placed by user (stacked above map and grid)
+                            ForEach(beaconManager.placedBeacons, id: \.name) { beacon in
+                                BeaconDot(beacon: beacon, mapContentSize: mapGeometry.size, viewport: viewport)
+                            }
+                            
+                            // Metric square overlay (above beacons)
+                            if let metricSquare = mapManager.metricSquare {
+                                MetricSquareView(
+                                    square: metricSquare,
+                                    mapContentSize: mapGeometry.size,
+                                    viewport: viewport,
+                                    mapManager: mapManager,
+                                    onMove: { newCenter in
+                                        mapManager.updateMetricSquareCenter(newCenter)
+                                    },
+                                    onResize: { newSide in
+                                        mapManager.updateMetricSquareSide(newSide)
+                                    }
+                                )
+                                .allowsHitTesting(mapManager.isEditingMetricSquare)
+                            }
+                            
+                            // Debug overlay - border around the map container bounds
+                            Rectangle()
+                                .stroke(Color.red, lineWidth: 2)
+                                .frame(
+                                    width: mapGeometry.size.width,
+                                    height: mapGeometry.size.height
+                                )
+                                .position(
+                                    x: mapGeometry.size.width / 2,
+                                    y: mapGeometry.size.height / 2
+                                )
+                        }
+                    }
+                    // Apply transforms to the entire map content
+                    .scaleEffect(viewport.scale, anchor: .center)
+                    .rotationEffect(.degrees(viewport.rotation))
+                    .offset(viewport.offset)
+                }
+                
+                // Armed Beacon Hint (outside the container so it doesn't move)
+                if let armedBeacon = beaconManager.armedBeacon {
+                    VStack {
+                        Spacer()
+                        HStack {
+                            Spacer()
+                            VStack(spacing: 8) {
+                                Text("Tap the map to place")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Text("'\(armedBeacon.name)'")
+                                    .font(.headline)
+                                    .foregroundColor(armedBeacon.color)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 6)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 8)
+                                            .fill(armedBeacon.color.opacity(0.1))
+                                    )
+                                Button("Cancel") {
+                                    beaconManager.cancelArmedBeacon()
+                                }
+                                .font(.caption)
+                                .foregroundColor(.red)
+                            }
+                            .padding()
+                            .background(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .fill(Color(.systemBackground))
+                                    .shadow(radius: 4)
+                            )
+                            Spacer()
+                        }
+                        .padding(.bottom, 100)
+                    }
+                }
+            }
+        }
+        .edgesIgnoringSafeArea(.all)
+        .onAppear {
+            // Sync initial state with legacy MapManager
+            viewport.scale = mapManager.scale
+            viewport.offset = mapManager.offset
+        }
+        .onChange(of: viewport.scale) { newScale in
+            mapManager.scale = newScale
+        }
+        .onChange(of: viewport.offset) { newOffset in
+            mapManager.offset = newOffset
+        }
+    }
+    
+    private func handleMapTap(at location: CGPoint, containerSize: CGSize) {
+        guard let armedBeacon = beaconManager.armedBeacon else { 
+            print("No armed beacon for placement")
+            return 
+        }
+        
+        print("=== TAP DEBUG ===")
+        print("Tap location: \(location)")
+        print("Container size: \(containerSize)")
+        
+        // Use the coordinate mapper to get normalized coordinates
+        Task { @MainActor in
+            let normalizedLocation = CoordinateMapper.normalizedPoint(
+                in: containerSize,
+                from: location,
+                viewport: viewport
+            )
+            
+            print("Normalized location: \(normalizedLocation)")
+            
+            // Sanity check: reproject back to container coordinates
+            let reprojectedLocation = CoordinateMapper.positionPoint(
+                in: containerSize,
+                normalized: normalizedLocation,
+                viewport: viewport
+            )
+            print("Reprojected location: \(reprojectedLocation)")
+            print("Difference: \(CGPoint(x: location.x - reprojectedLocation.x, y: location.y - reprojectedLocation.y))")
+            print("==================")
+            
+            // Place the beacon
+            beaconManager.placeBeacon(armedBeacon, at: normalizedLocation)
+            print("Beacon placed: \(armedBeacon.name)")
+        }
+    }
+}
+
+struct BeaconDot: View {
+    let beacon: PlacedBeacon
+    let mapContentSize: CGSize
+    @ObservedObject var viewport: ViewportState
+    
+    var body: some View {
+        // Convert normalized coordinates to container coordinates
+        // Since beacons are inside the transformed container, we don't apply viewport transforms here
+        let position = CGPoint(
+            x: beacon.position.x * mapContentSize.width,
+            y: beacon.position.y * mapContentSize.height
+        )
+        
+        Circle()
+            .fill(beacon.color)
+            .frame(width: 12, height: 12)
+            .overlay(
+                Circle()
+                    .stroke(Color.white, lineWidth: 2)
+            )
+            // Apply visual offset to account for visual center vs actual center
+            // Fixed offset since the container scaling will handle zoom scaling
+            .offset(y: -6) // Half the marker height
+            .position(position)
+    }
+}
+
+struct MetricSquareView: View {
+    let square: MetricSquare
+    let mapContentSize: CGSize
+    @ObservedObject var viewport: ViewportState
+    @ObservedObject var mapManager: MapManager
+    let onMove: (CGPoint) -> Void
+    let onResize: (CGFloat) -> Void
+    
+    @State private var isSelected = false
+    @State private var dragState: SquareDragState = .none
+    @State private var originalCenter: CGPoint = .zero
+    @State private var originalSide: CGFloat = 0
+    
+    enum SquareDragState: Equatable {
+        case none
+        case moving
+        case resizing(corner: Corner)
+    }
+    
+    enum Corner: Equatable {
+        case topLeft, topRight, bottomLeft, bottomRight
+    }
+    
+    // Gesture damping constants
+    private let gestureDamping: CGFloat = 0.7
+    private let gestureThreshold: CGFloat = 8
+    
+    var body: some View {
+        let centerPosition = CoordinateMapper.positionPoint(
+            in: mapContentSize,
+            normalized: square.center,
+            viewport: viewport
+        )
+        
+        let halfSide = (square.side * mapContentSize.width) / 2
+        let squareFrame = CGRect(
+            x: centerPosition.x - halfSide,
+            y: centerPosition.y - halfSide,
+            width: halfSide * 2,
+            height: halfSide * 2
+        )
+        
+        // Handle size - small visual, large hit area
+        let handleSize: CGFloat = 12
+        let hitAreaSize: CGFloat = 32
+        
+        ZStack {
+            // Main square
+            Rectangle()
+                .fill(Color.blue.opacity(0.2))
+                .overlay(
+                    Rectangle()
+                        .stroke(Color.blue, lineWidth: 2)
+                )
+                .frame(width: squareFrame.width, height: squareFrame.height)
+                .position(centerPosition)
+                .onTapGesture {
+                    if mapManager.isEditingMetricSquare {
+                        isSelected.toggle()
+                    } else {
+                        mapManager.startEditingMetricSquare()
+                        isSelected = true
+                    }
+                }
+            
+            // Center handle for moving
+            Circle()
+                .fill(isSelected ? Color.blue : Color.blue.opacity(0.6))
+                .frame(width: handleSize, height: handleSize)
+                .position(centerPosition)
+                .contentShape(Rectangle())
+                .frame(width: hitAreaSize, height: hitAreaSize)
+                .gesture(
+                    DragGesture()
+                        .onChanged { value in
+                            if dragState == SquareDragState.none {
+                                // Check threshold to avoid tap-becomes-drag jitter
+                                let distance = sqrt(pow(value.translation.width, 2) + pow(value.translation.height, 2))
+                                if distance < gestureThreshold {
+                                    return
+                                }
+                                dragState = .moving
+                                originalCenter = square.center
+                            }
+                            
+                            if case .moving = dragState {
+                                // Convert screen point to container point using inverse transform
+                                let screenPoint = CGPoint(
+                                    x: centerPosition.x + value.translation.width,
+                                    y: centerPosition.y + value.translation.height
+                                )
+                                
+                                let containerPoint = CoordinateMapper.normalizedPoint(
+                                    in: mapContentSize,
+                                    from: screenPoint,
+                                    viewport: viewport
+                                )
+                                
+                                // Calculate normalized delta with damping
+                                let dxNorm = (containerPoint.x - originalCenter.x) * gestureDamping
+                                let dyNorm = (containerPoint.y - originalCenter.y) * gestureDamping
+                                
+                                let newCenter = CGPoint(
+                                    x: max(0, min(1, originalCenter.x + dxNorm)),
+                                    y: max(0, min(1, originalCenter.y + dyNorm))
+                                )
+                                
+                                #if DEBUG
+                                print("=== METER BOX MOVE DEBUG ===")
+                                print("screenPoint: \(screenPoint)")
+                                print("containerPoint: \(containerPoint)")
+                                print("originalCenter: \(originalCenter)")
+                                print("dxNorm: \(dxNorm), dyNorm: \(dyNorm)")
+                                print("newCenter: \(newCenter)")
+                                print("=============================")
+                                #endif
+                                
+                                onMove(newCenter)
+                            }
+                        }
+                        .onEnded { _ in
+                            dragState = SquareDragState.none
+                        }
+                )
+            
+            // Corner handles for resizing
+            ForEach([Corner.topLeft, .topRight, .bottomLeft, .bottomRight], id: \.self) { corner in
+                let cornerPosition = cornerPosition(for: corner, in: squareFrame)
+                
+                Circle()
+                    .fill(isSelected ? Color.blue : Color.blue.opacity(0.6))
+                    .frame(width: handleSize, height: handleSize)
+                    .position(cornerPosition)
+                    .contentShape(Rectangle())
+                    .frame(width: hitAreaSize, height: hitAreaSize)
+                    .gesture(
+                        DragGesture()
+                            .onChanged { value in
+                                if dragState == SquareDragState.none {
+                                    // Check threshold to avoid tap-becomes-drag jitter
+                                    let distance = sqrt(pow(value.translation.width, 2) + pow(value.translation.height, 2))
+                                    if distance < gestureThreshold {
+                                        return
+                                    }
+                                    dragState = .resizing(corner: corner)
+                                    originalSide = square.side
+                                }
+                                
+                                if case .resizing = dragState {
+                                    // Convert screen point to container point using inverse transform
+                                    let screenPoint = CGPoint(
+                                        x: cornerPosition.x + value.translation.width,
+                                        y: cornerPosition.y + value.translation.height
+                                    )
+                                    
+                                    let containerPoint = CoordinateMapper.normalizedPoint(
+                                        in: mapContentSize,
+                                        from: screenPoint,
+                                        viewport: viewport
+                                    )
+                                    
+                                    // Calculate normalized change with damping
+                                    let dx = containerPoint.x - square.center.x
+                                    let dy = containerPoint.y - square.center.y
+                                    let delta = max(abs(dx), abs(dy)) * gestureDamping
+                                    
+                                    // Preserve sign based on corner direction
+                                    let signedDelta = (dx > 0 || dy > 0) ? delta : -delta
+                                    
+                                    // Update side only (center stays constant)
+                                    let newSide = max(0.01, min(0.5, originalSide + signedDelta))
+                                    onResize(newSide)
+                                }
+                            }
+                            .onEnded { _ in
+                                dragState = SquareDragState.none
+                            }
+                    )
+            }
+            
+            // Size label
+            Text("1.00 m")
+                .font(.caption)
+                .foregroundColor(.blue)
+                .padding(4)
+                .background(
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(Color.white.opacity(0.8))
+                )
+                .position(x: centerPosition.x, y: centerPosition.y - squareFrame.height/2 - 20)
+        }
+        .zIndex(1) // Ensure it's above other elements
+    }
+    
+    private func cornerPosition(for corner: Corner, in frame: CGRect) -> CGPoint {
+        switch corner {
+        case .topLeft:
+            return CGPoint(x: frame.minX, y: frame.minY)
+        case .topRight:
+            return CGPoint(x: frame.maxX, y: frame.minY)
+        case .bottomLeft:
+            return CGPoint(x: frame.minX, y: frame.maxY)
+        case .bottomRight:
+            return CGPoint(x: frame.maxX, y: frame.maxY)
+        }
+    }
+}
+
+#Preview {
+    MapView(mapManager: MapManager(), beaconManager: BeaconManager(), viewport: ViewportState())
+}
+
+
+//
+//  NavTaggerApp.swift
+//  NavTagger
+//
+//  Created by Chris Gelles on 9/6/25.
+//
+
+import SwiftUI
+
+@main
+struct NavTaggerApp: App {
+    var body: some Scene {
+        WindowGroup {
+            ContentView()
+        }
+    }
+}
+
+
+//
+//  UnifiedMapView.swift
+//  NavTagger
+//
+//  Created by Chris Gelles on 9/7/25.
+//
+
+import SwiftUI
+import UIKit
+
+// MARK: - Unified Map View with ViewportKit
+
+struct UnifiedMapView<Content: View>: UIViewRepresentable {
+    @ObservedObject var viewport: ViewportState
+    let isEditingMetricSquare: Bool
+    let onTap: (CGPoint, CGSize) -> Void
+    let content: () -> Content
+    
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        view.backgroundColor = UIColor.clear // Temporarily clear for debugging
+        view.isUserInteractionEnabled = true
+        view.isMultipleTouchEnabled = true
+        
+        // Create a UIHostingController to host the SwiftUI content
+        let hostingController = UIHostingController(rootView: content())
+        hostingController.view.backgroundColor = UIColor.clear
+        hostingController.view.isUserInteractionEnabled = false // Disable touch handling on hosting controller
+        
+        // Add the hosting controller's view as a child
+        view.addSubview(hostingController.view)
+        hostingController.view.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            hostingController.view.topAnchor.constraint(equalTo: view.topAnchor),
+            hostingController.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            hostingController.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            hostingController.view.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+        ])
+        
+        // Store reference to hosting controller
+        context.coordinator.hostingController = hostingController
+        
+        // Add gesture recognizers
+        let pinchGesture = UIPinchGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handlePinch(_:)))
+        let panGesture = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handlePan(_:)))
+        let rotationGesture = UIRotationGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleRotation(_:)))
+        let tapGesture = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleTap(_:)))
+        
+        // Configure pan gesture for single finger only
+        panGesture.minimumNumberOfTouches = 1
+        panGesture.maximumNumberOfTouches = 1
+        
+        // Set delegates
+        pinchGesture.delegate = context.coordinator
+        panGesture.delegate = context.coordinator
+        rotationGesture.delegate = context.coordinator
+        tapGesture.delegate = context.coordinator
+        
+        // Gate gesture recognizers based on edit mode
+        if !isEditingMetricSquare {
+            view.addGestureRecognizer(pinchGesture)
+            view.addGestureRecognizer(panGesture)
+            view.addGestureRecognizer(rotationGesture)
+            view.addGestureRecognizer(tapGesture)
+        }
+        
+        return view
+    }
+    
+    func updateUIView(_ uiView: UIView, context: Context) {
+        // Reliably refresh hosted SwiftUI when viewport state changes
+        if let hc = context.coordinator.hostingController {
+            hc.rootView = content()
+        }
+        
+        // Update gesture recognizer state based on edit mode
+        let shouldEnableGestures = !isEditingMetricSquare
+        for gesture in uiView.gestureRecognizers ?? [] {
+            gesture.isEnabled = shouldEnableGestures
+        }
+    }
+    
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+    
+    class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        let parent: UnifiedMapView
+        var hostingController: UIHostingController<Content>?
+        private var orchestrator: GestureOrchestrator
+        
+        init(_ parent: UnifiedMapView) {
+            self.parent = parent
+            self.orchestrator = GestureOrchestrator(
+                viewport: parent.viewport,
+                onTap: { point, size in
+                    parent.onTap(point, size)
+                }
+            )
+        }
+        
+        // MARK: - Pinch Gesture Handler
+        
+        @objc func handlePinch(_ recognizer: UIPinchGestureRecognizer) {
+            guard let view = recognizer.view else { return }
+            
+            switch recognizer.state {
+            case .began:
+                recognizer.scale = 1.0
+                Task { @MainActor in
+                    orchestrator.beginZoom(at: recognizer.location(in: view))
+                }
+                
+            case .changed:
+                let scale = recognizer.scale
+                let point = recognizer.location(in: view)
+                Task { @MainActor in
+                    orchestrator.updateZoom(scale: scale, at: point, containerSize: view.bounds.size)
+                }
+                recognizer.scale = 1.0
+                
+            case .ended, .cancelled:
+                Task { @MainActor in
+                    orchestrator.endZoom()
+                }
+                
+            default:
+                break
+            }
+        }
+        
+        // MARK: - Pan Gesture Handler
+        
+        @objc func handlePan(_ recognizer: UIPanGestureRecognizer) {
+            guard let view = recognizer.view else { return }
+            
+            switch recognizer.state {
+            case .began:
+                Task { @MainActor in
+                    orchestrator.beginPan(at: recognizer.location(in: view))
+                }
+                
+            case .changed:
+                let translation = recognizer.translation(in: view)
+                let point = recognizer.location(in: view)
+                Task { @MainActor in
+                    orchestrator.updatePan(translation: CGSize(width: translation.x, height: translation.y), at: point)
+                }
+                
+            case .ended, .cancelled:
+                let point = recognizer.location(in: view)
+                let size = view.bounds.size
+                Task { @MainActor in
+                    orchestrator.endPan(at: point, in: size)
+                }
+                
+            default:
+                break
+            }
+        }
+        
+        // MARK: - Rotation Gesture Handler
+        
+        @objc func handleRotation(_ recognizer: UIRotationGestureRecognizer) {
+            guard let view = recognizer.view else { return }
+            
+            switch recognizer.state {
+            case .began:
+                recognizer.rotation = 0.0
+                Task { @MainActor in
+                    orchestrator.beginRotate(at: recognizer.location(in: view))
+                }
+                
+            case .changed:
+                let rotation = recognizer.rotation * 180 / .pi // Convert to degrees
+                Task { @MainActor in
+                    orchestrator.updateRotate(rotation: rotation)
+                }
+                recognizer.rotation = 0.0
+                
+            case .ended, .cancelled:
+                Task { @MainActor in
+                    orchestrator.endRotate()
+                }
+                
+            default:
+                break
+            }
+        }
+        
+        // MARK: - Tap Gesture Handler
+        
+        @objc func handleTap(_ recognizer: UITapGestureRecognizer) {
+            guard let view = recognizer.view else { return }
+            let point = recognizer.location(in: view)
+            let size = view.bounds.size
+            parent.onTap(point, size)
+        }
+        
+        // MARK: - Gesture Recognizer Delegate
+        
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+            return true
+        }
+        
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+            return true
+        }
+    }
+}
+
+// MARK: - Map Container View
+
+struct MapContainer<Content: View>: View {
+    @ObservedObject var viewport: ViewportState
+    let content: () -> Content
+    
+    var body: some View {
+        GeometryReader { geometry in
+            UnifiedMapView(viewport: viewport, isEditingMetricSquare: false, onTap: { point, size in
+                // This will be handled by the parent view
+            }) {
+                // Single map container with all transforms applied
+                ZStack {
+                    content()
+                }
+                .scaleEffect(viewport.scale, anchor: .center)
+                .rotationEffect(.degrees(viewport.rotation))
+                .offset(viewport.offset)
+            }
+        }
+    }
+}
+
+
+//
+//  ViewportKit.swift
+//  NavTagger
+//
+//  Created by Chris Gelles on 9/7/25.
+//
+
+import SwiftUI
+import UIKit
+
+// MARK: - Viewport State Model
+
+@MainActor
+class ViewportState: ObservableObject {
+    @Published var scale: CGFloat = 1.0
+    @Published var offset: CGSize = .zero
+    @Published var rotation: CGFloat = 0.0
+    @Published var headingOffset: CGFloat = 0.0 // Optional compass offset
+    
+    // Configuration
+    let minScale: CGFloat
+    let maxScale: CGFloat
+    let maxRotationSpeed: CGFloat
+    let panThreshold: CGFloat
+    
+    init(
+        minScale: CGFloat = 0.5,
+        maxScale: CGFloat = 3.0,
+        maxRotationSpeed: CGFloat = 2.0,
+        panThreshold: CGFloat = 10.0
+    ) {
+        self.minScale = minScale
+        self.maxScale = maxScale
+        self.maxRotationSpeed = maxRotationSpeed
+        self.panThreshold = panThreshold
+    }
+    
+    // MARK: - State Updates
+    
+    func updateScale(_ newScale: CGFloat) {
+        scale = max(minScale, min(maxScale, newScale))
+    }
+    
+    func updateOffset(_ newOffset: CGSize) {
+        offset = newOffset
+    }
+    
+    func updateRotation(_ newRotation: CGFloat) {
+        // Normalize rotation to 0-360 degrees
+        let normalized = newRotation.truncatingRemainder(dividingBy: 360)
+        rotation = normalized < 0 ? normalized + 360 : normalized
+    }
+    
+    func setHeadingOffset(_ degrees: CGFloat) {
+        headingOffset = degrees
+    }
+    
+    // MARK: - Reset Helpers
+    
+    func resetTransform() {
+        scale = 1.0
+        offset = .zero
+        rotation = 0.0
+        headingOffset = 0.0
+    }
+    
+    func fitToBounds(mapSize: CGSize, containerSize: CGSize) {
+        let scaleX = containerSize.width / mapSize.width
+        let scaleY = containerSize.height / mapSize.height
+        let fitScale = min(scaleX, scaleY)
+        
+        scale = max(minScale, min(maxScale, fitScale))
+        offset = .zero
+        rotation = 0.0
+    }
+}
+
+// MARK: - Coordinate Mapper
+
+struct CoordinateMapper {
+    @MainActor
+    static func normalizedPoint(
+        in containerSize: CGSize,
+        from screenPoint: CGPoint,
+        viewport: ViewportState
+    ) -> CGPoint {
+        // Convert screen point to container coordinates
+        let containerPoint = screenPointToContainerPoint(
+            screenPoint: screenPoint,
+            containerSize: containerSize,
+            viewport: viewport
+        )
+        
+        // Normalize to 0-1 range
+        let normalizedX = max(0, min(1, containerPoint.x / containerSize.width))
+        let normalizedY = max(0, min(1, containerPoint.y / containerSize.height))
+        
+        return CGPoint(x: normalizedX, y: normalizedY)
+    }
+    
+    static func positionPoint(
+        in containerSize: CGSize,
+        normalized: CGPoint,
+        viewport: ViewportState
+    ) -> CGPoint {
+        // Convert normalized coordinates to container coordinates
+        let containerX = normalized.x * containerSize.width
+        let containerY = normalized.y * containerSize.height
+        
+        return CGPoint(x: containerX, y: containerY)
+    }
+    
+    @MainActor
+    private static func screenPointToContainerPoint(
+        screenPoint: CGPoint,
+        containerSize: CGSize,
+        viewport: ViewportState
+    ) -> CGPoint {
+        // Apply inverse transforms in reverse order: translate → rotate → scale
+        
+        // 1. Remove offset (inverse translate)
+        var point = CGPoint(
+            x: screenPoint.x - viewport.offset.width,
+            y: screenPoint.y - viewport.offset.height
+        )
+        
+        // 2. Remove rotation (inverse rotate around center)
+        let center = CGPoint(x: containerSize.width / 2, y: containerSize.height / 2)
+        let angle = -viewport.rotation * .pi / 180 // Convert to radians
+        let cos = cos(angle)
+        let sin = sin(angle)
+        
+        let rotatedX = point.x - center.x
+        let rotatedY = point.y - center.y
+        
+        point = CGPoint(
+            x: rotatedX * cos - rotatedY * sin + center.x,
+            y: rotatedX * sin + rotatedY * cos + center.y
+        )
+        
+        // 3. Remove scale (inverse scale around center)
+        point = CGPoint(
+            x: (point.x - center.x) / viewport.scale + center.x,
+            y: (point.y - center.y) / viewport.scale + center.y
+        )
+        
+        return point
+    }
+}
+
+// MARK: - Gesture Orchestrator
+
+struct GestureOrchestrator {
+    let viewport: ViewportState
+    let onTap: (CGPoint, CGSize) -> Void
+    
+    // Internal state for gesture handling
+    private var panStartOffset: CGSize = .zero
+    private var panStartPoint: CGPoint = .zero
+    private var isPanning: Bool = false
+    
+    init(viewport: ViewportState, onTap: @escaping (CGPoint, CGSize) -> Void) {
+        self.viewport = viewport
+        self.onTap = onTap
+    }
+    
+    // MARK: - Pan Gesture Handlers
+    
+    @MainActor
+    mutating func beginPan(at point: CGPoint) {
+        panStartOffset = viewport.offset
+        panStartPoint = point
+        isPanning = false
+    }
+    
+    @MainActor
+    mutating func updatePan(translation: CGSize, at point: CGPoint) {
+        let distance = sqrt(pow(point.x - panStartPoint.x, 2) + pow(point.y - panStartPoint.y, 2))
+        
+        if distance > viewport.panThreshold {
+            isPanning = true
+        }
+        
+        if isPanning {
+            let newOffset = CGSize(
+                width: panStartOffset.width + translation.width,
+                height: panStartOffset.height + translation.height
+            )
+            viewport.updateOffset(newOffset)
+        }
+    }
+    
+    @MainActor
+    func endPan(at point: CGPoint, in size: CGSize) {
+        if !isPanning {
+            // This was a tap, not a pan
+            onTap(point, size)
+        }
+    }
+    
+    // MARK: - Zoom Gesture Handlers
+    
+    @MainActor
+    mutating func beginZoom(at point: CGPoint) {
+        // Reset any ongoing pan
+        isPanning = false
+    }
+    
+    @MainActor
+    func updateZoom(scale: CGFloat, at point: CGPoint, containerSize: CGSize) {
+        let oldScale = viewport.scale
+        let newScale = oldScale * scale
+        viewport.updateScale(newScale)
+        
+        // Apply anchor-corrected offset to keep point under fingers stationary
+        let t = newScale / oldScale
+        let center = CGPoint(x: containerSize.width / 2, y: containerSize.height / 2)
+        let oldOffset = viewport.offset
+        let dx = point.x - center.x - oldOffset.width
+        let dy = point.y - center.y - oldOffset.height
+        
+        let newOffset = CGSize(
+            width: oldOffset.width + (1 - t) * dx,
+            height: oldOffset.height + (1 - t) * dy
+        )
+        viewport.updateOffset(newOffset)
+    }
+    
+    @MainActor
+    func endZoom() {
+        // Zoom gesture ended
+    }
+    
+    // MARK: - Rotation Gesture Handlers
+    
+    @MainActor
+    mutating func beginRotate(at point: CGPoint) {
+        // Reset any ongoing pan
+        isPanning = false
+    }
+    
+    @MainActor
+    func updateRotate(rotation: CGFloat) {
+        let newRotation = viewport.rotation + rotation
+        viewport.updateRotation(newRotation)
+    }
+    
+    @MainActor
+    func endRotate() {
+        // Rotation gesture ended
+    }
+}

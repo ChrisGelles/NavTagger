@@ -12,6 +12,7 @@ import UIKit
 
 struct UnifiedMapView<Content: View>: UIViewRepresentable {
     @ObservedObject var viewport: ViewportState
+    let isEditingMetricSquare: Bool
     let onTap: (CGPoint, CGSize) -> Void
     let content: () -> Content
     
@@ -24,7 +25,7 @@ struct UnifiedMapView<Content: View>: UIViewRepresentable {
         // Create a UIHostingController to host the SwiftUI content
         let hostingController = UIHostingController(rootView: content())
         hostingController.view.backgroundColor = UIColor.clear
-        hostingController.view.isUserInteractionEnabled = false // Disable touch handling on hosting controller
+        hostingController.view.isUserInteractionEnabled = true // ENABLE touch handling for SwiftUI content (like MetricSquareView)
         
         // Add the hosting controller's view as a child
         view.addSubview(hostingController.view)
@@ -55,10 +56,13 @@ struct UnifiedMapView<Content: View>: UIViewRepresentable {
         rotationGesture.delegate = context.coordinator
         tapGesture.delegate = context.coordinator
         
-        view.addGestureRecognizer(pinchGesture)
-        view.addGestureRecognizer(panGesture)
-        view.addGestureRecognizer(rotationGesture)
-        view.addGestureRecognizer(tapGesture)
+        // Gate gesture recognizers based on edit mode
+        //if !isEditingMetricSquare {
+            view.addGestureRecognizer(pinchGesture)
+            view.addGestureRecognizer(panGesture)
+            view.addGestureRecognizer(rotationGesture)
+            view.addGestureRecognizer(tapGesture)
+        //}
         
         return view
     }
@@ -68,6 +72,7 @@ struct UnifiedMapView<Content: View>: UIViewRepresentable {
         if let hc = context.coordinator.hostingController {
             hc.rootView = content()
         }
+        
     }
     
     func makeCoordinator() -> Coordinator {
@@ -207,7 +212,7 @@ struct MapContainer<Content: View>: View {
     
     var body: some View {
         GeometryReader { geometry in
-            UnifiedMapView(viewport: viewport, onTap: { point, size in
+            UnifiedMapView(viewport: viewport, isEditingMetricSquare: false, onTap: { point, size in
                 // This will be handled by the parent view
             }) {
                 // Single map container with all transforms applied

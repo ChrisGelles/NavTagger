@@ -8,14 +8,30 @@
 import SwiftUI
 import CoreLocation
 
+// MARK: - Metric Square Model
+
+struct MetricSquare {
+    var center: CGPoint  // Normalized coordinates (0...1)
+    var side: CGFloat    // Normalized side length (0...1)
+    
+    init(center: CGPoint, side: CGFloat) {
+        self.center = center
+        self.side = side
+    }
+}
+
 class MapManager: NSObject, ObservableObject {
     // Map state
     @Published var scale: CGFloat = 1.0
     @Published var offset: CGSize = .zero
     
+    // Metric square state
+    @Published var metricSquare: MetricSquare?
+    @Published var isEditingMetricSquare: Bool = false
+    
     // Bounds checking
     private let minScale: CGFloat = 0.5
-    private let maxScale: CGFloat = 5.0  // Increased max zoom
+    private let maxScale: CGFloat = 10.0  // Increased max zoom
     private let maxOffset: CGFloat = 500.0
     
     // Gesture state
@@ -150,6 +166,39 @@ class MapManager: NSObject, ObservableObject {
         lastScale = 1.0
         offset = .zero
         lastPanOffset = .zero
+    }
+    
+    // MARK: - Metric Square Management
+    
+    func createMetricSquare(at center: CGPoint, side: CGFloat = 0.05) {
+        metricSquare = MetricSquare(center: center, side: side)
+    }
+    
+    func removeMetricSquare() {
+        metricSquare = nil
+        isEditingMetricSquare = false
+    }
+    
+    func updateMetricSquareCenter(_ newCenter: CGPoint) {
+        guard var square = metricSquare else { return }
+        square.center = newCenter
+        metricSquare = square
+    }
+    
+    func updateMetricSquareSide(_ newSide: CGFloat) {
+        guard var square = metricSquare else { return }
+        // Clamp side to reasonable bounds (1% to 50% of map)
+        let clampedSide = max(0.01, min(0.5, newSide))
+        square.side = clampedSide
+        metricSquare = square
+    }
+    
+    func startEditingMetricSquare() {
+        isEditingMetricSquare = true
+    }
+    
+    func stopEditingMetricSquare() {
+        isEditingMetricSquare = false
     }
 }
 
